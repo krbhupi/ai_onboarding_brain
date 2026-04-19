@@ -1,0 +1,53 @@
+# FastAPI and ASGI server
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+
+# Database
+sqlalchemy>=2.0
+aiosqlite>=0.19
+asyncpg>=0.28
+alembic>=1.12
+
+# Data validation
+pydantic>=2.0
+pydantic-settings>=2.0
+python-multipart>=0.0.6
+
+# Excel processing
+openpyxl>=3.1
+
+# Email handling
+imapclient>=2.3
+
+# HTTP client for LLM calls
+httpx>=0.24
+
+# Task scheduling
+apscheduler>=3.10
+
+# Environment management
+python-dotenv>=1.0
+
+# Testing
+pytest>=7.0
+pytest-asyncio>=0.21
+pytest-cov>=4.0
+
+# Logging
+structlog>=23.0
+
+# File handling
+aiofiles>=23.0
+python-magic>=0.4
+Pillow>=10.0
+
+# PDF processing
+PyPDF2>=3.0
+pdfplumber>=0.11
+pdf2image>=1.17
+
+# OCR processing
+pytesseract>=0.3
+
+# SQLite async support
+aiosqlite>=0.19
