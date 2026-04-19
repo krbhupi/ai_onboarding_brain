@@ -38,6 +38,7 @@ data/documents/
 data/temp/
 data/input/*.xlsx
 data/input/*.xls
+!data/input/*template*.xlsx
 
 # OS files
 .DS_Store

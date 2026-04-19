@@ -3,20 +3,15 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
-from airflow.providers.postgres.operators.postgres import PostgresOperator
 
-from config.settings import get_settings
-
-settings = get_settings()
-
+# Default arguments for the DAG
 default_args = {
     'owner': 'hr_automation',
     'depends_on_past': False,
-    'email_on_failure': True,
+    'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 3,
+    'retries': 2,
     'retry_delay': timedelta(minutes=5),
-    'email': ['hr@example.com']
 }
 
 
@@ -27,15 +22,19 @@ def run_etl_pipeline(**context):
     import os
 
     # Add project path
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
     from src.services.etl_service import ETLService
-    from src.core.database import async_session_maker
+    from src.core.database import get_db, init_db
 
     async def _run():
-        async with async_session_maker() as session:
+        await init_db()
+        async for session in get_db():
             etl = ETLService(session)
-            return await etl.sync_candidates()
+            result = await etl.sync_candidates()
+            return result
 
     return asyncio.run(_run())
 
@@ -45,39 +44,30 @@ def check_pending_jobs(**context):
     import asyncio
     import sys
     import os
+    from datetime import date
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
     from sqlalchemy import select
     from src.models.database import JobTracker, StatusMaster
-    from src.core.database import async_session_maker
+    from src.core.database import get_db, init_db
     from src.constants.constants import StatusType
 
     async def _check():
-        async with async_session_maker() as session:
-            # Get pending status
-            status_result = await session.execute(
-                select(StatusMaster).where(StatusMaster.status_type == "pending")
-            )
-            pending_status = status_result.scalar_one_or_none()
-
-            if not pending_status:
-                return []
-
-            # Get pending jobs
+        await init_db()
+        async for session in get_db():
             result = await session.execute(
                 select(JobTracker).where(
-                    JobTracker.status_id == pending_status.status_id,
-                    JobTracker.action_date <= datetime.utcnow().date()
+                    JobTracker.status_id == StatusType.PENDING,
+                    JobTracker.action_date <= date.today()
                 )
             )
             jobs = result.scalars().all()
-
             return [job.job_id for job in jobs]
 
-    job_ids = asyncio.run(_check())
-    context['ti'].xcom_push(key='pending_job_ids', value=job_ids)
-    return len(job_ids)
+    return asyncio.run(_check())
 
 
 def process_job(**context):
@@ -86,24 +76,57 @@ def process_job(**context):
     import sys
     import os
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
-    from src.agent.orchestrator import run_job_sync
+    from src.mcp_tools.gap_analysis import GapAnalysisTool
+    from src.mcp_tools.draft_prepare import DraftPrepareTool
+    from src.core.database import get_db, init_db
+    from src.models.database import JobTracker
+    from src.constants.constants import StatusType
+    from sqlalchemy import select
+    from datetime import date
 
-    job_ids = context['ti'].xcom_pull(key='pending_job_ids', task_ids='check_pending_jobs')
+    job_ids = context['ti'].xcom_pull(task_ids='check_pending_jobs')
 
     if not job_ids:
         return "No jobs to process"
 
-    processed = []
-    for job_id in job_ids[:10]:  # Process up to 10 jobs per run
-        try:
-            result = run_job_sync(job_id)
-            processed.append({'job_id': job_id, 'status': 'success', 'result': str(result)})
-        except Exception as e:
-            processed.append({'job_id': job_id, 'status': 'error', 'error': str(e)})
+    async def _process():
+        await init_db()
+        async for session in get_db():
+            processed = []
+            for job_id in job_ids[:5]:  # Process up to 5 jobs per run
+                try:
+                    # Get job
+                    result = await session.execute(
+                        select(JobTracker).where(JobTracker.job_id == job_id)
+                    )
+                    job = result.scalar_one_or_none()
 
-    return processed
+                    if job:
+                        # Update status to in progress
+                        job.status_id = StatusType.IN_PROGRESS
+                        await session.commit()
+
+                        # Process based on job type
+                        if job.job_type_id == 1:  # documents_required
+                            # Run gap analysis
+                            gap_tool = GapAnalysisTool(session)
+                            await gap_tool.execute(candidate_id=job.candidate_id)
+
+                        # Mark complete
+                        job.status_id = StatusType.COMPLETE
+                        await session.commit()
+                        processed.append({'job_id': job_id, 'status': 'success'})
+
+                except Exception as e:
+                    processed.append({'job_id': job_id, 'status': 'error', 'error': str(e)})
+
+            return processed
+
+    return asyncio.run(_process())
 
 
 def check_inbox(**context):
@@ -112,34 +135,40 @@ def check_inbox(**context):
     import sys
     import os
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
     from src.services.email_service import EmailService
 
     async def _check():
         email_service = EmailService()
-        emails = await email_service.read_inbox(unread_only=True)
-        return len(emails)
+        emails = await email_service.read_inbox(unread_only=True, limit=50)
+        return f"Processed {len(emails)} new emails"
 
     return asyncio.run(_check())
 
 
 def create_daily_jobs(**context):
-    """Create daily read_inbox and gap_analysis jobs for active candidates."""
+    """Create daily follow-up jobs for active candidates."""
     import asyncio
     import sys
     import os
     from datetime import date
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
     from sqlalchemy import select
-    from src.models.database import CandidateInfo, JobTracker, JobTypeMaster, StatusMaster
-    from src.core.database import async_session_maker
+    from src.models.database import CandidateInfo, JobTracker, JobTypeMaster
+    from src.core.database import get_db, init_db
+    from src.constants.constants import StatusType
 
     async def _create():
-        async with async_session_maker() as session:
-            # Get active candidates (status = 'offer_accepted' or similar)
+        await init_db()
+        async for session in get_db():
+            # Get all active candidates
             result = await session.execute(
                 select(CandidateInfo).where(
                     CandidateInfo.current_status.in_(['offer_accepted', 'onboarding', 'documents_pending'])
@@ -147,34 +176,37 @@ def create_daily_jobs(**context):
             )
             candidates = result.scalars().all()
 
-            # Get job types
-            read_inbox_type = await session.execute(
-                select(JobTypeMaster).where(JobTypeMaster.job_type == "read_inbox")
+            # Get followup job type
+            result = await session.execute(
+                select(JobTypeMaster).where(JobTypeMaster.job_type == "followup_mail")
             )
-            read_inbox = read_inbox_type.scalar_one_or_none()
-
-            # Get pending status
-            pending_status = await session.execute(
-                select(StatusMaster).where(StatusMaster.status_type == "pending")
-            )
-            pending = pending_status.scalar_one_or_none()
+            followup_type = result.scalar_one_or_none()
 
             jobs_created = 0
             for candidate in candidates:
-                # Create read_inbox job
-                job = JobTracker(
-                    candidate_id=candidate.candidate_id,
-                    job_type_id=read_inbox.job_type_id if read_inbox else 4,
-                    status_id=pending.status_id if pending else 1,
-                    action_date=date.today(),
-                    human_action_required=False,
-                    start_time=datetime.utcnow()
+                # Check if job already exists for today
+                result = await session.execute(
+                    select(JobTracker).where(
+                        JobTracker.candidate_id == candidate.candidate_id,
+                        JobTracker.job_type_id == followup_type.job_type_id,
+                        JobTracker.action_date == date.today()
+                    )
                 )
-                session.add(job)
-                jobs_created += 1
+                existing = result.scalar_one_or_none()
+
+                if not existing:
+                    job = JobTracker(
+                        candidate_id=candidate.candidate_id,
+                        job_type_id=followup_type.job_type_id,
+                        status_id=StatusType.PENDING,
+                        action_date=date.today(),
+                        human_action_required=True
+                    )
+                    session.add(job)
+                    jobs_created += 1
 
             await session.commit()
-            return jobs_created
+            return f"Created {jobs_created} follow-up jobs"
 
     return asyncio.run(_create())
 
@@ -186,32 +218,27 @@ def cleanup_old_jobs(**context):
     import os
     from datetime import timedelta
 
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_path not in sys.path:
+        sys.path.insert(0, project_path)
 
     from sqlalchemy import delete
-    from src.models.database import JobTracker, StatusMaster
-    from src.core.database import async_session_maker
+    from src.models.database import JobTracker
+    from src.core.database import get_db, init_db
+    from src.constants.constants import StatusType
 
     async def _cleanup():
-        async with async_session_maker() as session:
-            # Get complete status
-            status_result = await session.execute(
-                select(StatusMaster).where(StatusMaster.status_type == "complete")
-            )
-            complete_status = status_result.scalar_one_or_none()
-
-            if complete_status:
-                cutoff_date = datetime.utcnow() - timedelta(days=30)
-                result = await session.execute(
-                    delete(JobTracker).where(
-                        JobTracker.status_id == complete_status.status_id,
-                        JobTracker.updated_on < cutoff_date
-                    )
+        await init_db()
+        async for session in get_db():
+            cutoff_date = datetime.utcnow() - timedelta(days=30)
+            result = await session.execute(
+                delete(JobTracker).where(
+                    JobTracker.status_id == StatusType.COMPLETE,
+                    JobTracker.updated_on < cutoff_date
                 )
-                await session.commit()
-                return result.rowcount
-
-            return 0
+            )
+            await session.commit()
+            return f"Cleaned up {result.rowcount} old jobs"
 
     return asyncio.run(_cleanup())
 
@@ -224,14 +251,26 @@ dag = DAG(
     schedule_interval='0 22 * * *',  # Daily at 10 PM IST
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=['hr', 'onboarding', 'etl']
+    tags=['hr', 'onboarding', 'etl'],
+    doc_md="""
+    ## HR Onboarding ETL Pipeline
+
+    This DAG performs the following tasks daily:
+    1. Syncs candidate data from Excel to database
+    2. Creates follow-up jobs for active candidates
+    3. Checks inbox for new emails
+    4. Processes pending jobs
+    5. Cleans up old completed jobs
+
+    ### Configuration
+    - Excel file: data/input/offer_tracker.xlsx
+    - Database: hr_onboarding.db (SQLite)
+    - Email: Gmail SMTP/IMAP
+    """
 )
 
 # Task definitions
-start_task = EmptyOperator(
-    task_id='start',
-    dag=dag
-)
+start_task = EmptyOperator(task_id='start', dag=dag)
 
 etl_task = PythonOperator(
     task_id='run_etl_pipeline',
@@ -269,12 +308,10 @@ cleanup_task = PythonOperator(
     dag=dag
 )
 
-end_task = EmptyOperator(
-    task_id='end',
-    dag=dag
-)
+end_task = EmptyOperator(task_id='end', dag=dag)
 
 # Define task dependencies
+# start >> etl >> create_jobs >> [check_jobs, check_inbox] >> process >> cleanup >> end
 start_task >> etl_task >> create_jobs_task >> [check_jobs_task, check_inbox_task]
 check_jobs_task >> process_jobs_task
 [process_jobs_task, check_inbox_task] >> cleanup_task >> end_task
