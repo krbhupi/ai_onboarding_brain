@@ -249,14 +249,16 @@ Perform gap analysis and identify what's missing or invalid."""
     async def validate_document_vision(
         self,
         image_path: str,
-        expected_type: Optional[str] = None
+        expected_type: Optional[str] = None,
+        candidate_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Validate document using Vision LLM (VLLM).
 
         Processes image/PDF directly using vision model to:
         1. Identify document type
-        2. Extract key information
+        2. Extract key information (including person's name)
         3. Validate document authenticity
+        4. Check name match with candidate
 
         Supports multiple backends:
         - local_ollama: Local Ollama instance with vision model (llava)
@@ -266,6 +268,7 @@ Perform gap analysis and identify what's missing or invalid."""
         Args:
             image_path: Path to image or PDF file
             expected_type: Expected document type (optional, for validation)
+            candidate_name: Expected candidate name for name validation (optional)
 
         Returns:
             Dict with validation results and extracted information
@@ -274,17 +277,18 @@ Perform gap analysis and identify what's missing or invalid."""
 
         # Try vision backends in order
         if self.vision_backend == "local_ollama":
-            return await self._validate_with_local_vision(image_path, expected_type)
+            return await self._validate_with_local_vision(image_path, expected_type, candidate_name)
         elif self.vision_backend == "ocr_fallback":
-            return await self._validate_with_ocr_fallback(image_path, expected_type)
+            return await self._validate_with_ocr_fallback(image_path, expected_type, candidate_name)
         else:
             # Default to OCR fallback
-            return await self._validate_with_ocr_fallback(image_path, expected_type)
+            return await self._validate_with_ocr_fallback(image_path, expected_type, candidate_name)
 
     async def _validate_with_local_vision(
         self,
         image_path: str,
-        expected_type: Optional[str] = None
+        expected_type: Optional[str] = None,
+        candidate_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Validate using local Ollama instance with vision model."""
         import json
@@ -297,24 +301,35 @@ Perform gap analysis and identify what's missing or invalid."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "error": "Failed to process image"
             }
 
         system_prompt = """You are a document validation and OCR assistant.
 Analyze the document image and identify:
 1. Document type (Aadhaar Card, PAN Card, Degree Certificate, Bank Passbook/Cancelled Cheque, Marksheet, Experience Certificate, Relieving Letter, Salary Slip, Form 16, etc.)
-2. Extract all visible text and key information
-3. Determine if the document appears authentic
+2. Extract all visible text and key information - especially the person's NAME
+3. Determine if the document appears authentic (NOT a sample, placeholder, or dummy document)
+4. Check if this is a REAL document for a real person
 
 Return a JSON response with:
-- "is_valid": boolean (true if document is readable and appears authentic)
+- "is_valid": boolean (true if document is readable AND authentic AND not a sample)
 - "document_type": string (identified document type)
 - "confidence": float between 0 and 1
-- "extracted_info": object with key information (name, dates, id_numbers, etc.)
-- "text_content": full extracted text from the document"""
+- "extracted_info": object with key information including "person_name"
+- "text_content": full extracted text from the document
+- "is_sample": boolean (true if document appears to be a sample/dummy)
+- "name_match": boolean (true if extracted name matches expected candidate name)"""
 
         prompt = f"""Analyze this document image and extract all information.
 {f'Expected document type: {expected_type}' if expected_type else ''}
+{f'Expected candidate name: {candidate_name}' if candidate_name else ''}
+
+IMPORTANT:
+1. Identify the document type
+2. Extract the person's name from the document
+3. Check if this is a REAL document (not a sample/dummy/placeholder)
+4. If candidate_name is provided, check if the document name matches
 
 Identify the document type, validate it, and extract all relevant information.
 Return results as JSON."""
@@ -330,11 +345,26 @@ Return results as JSON."""
                 json_str = response[json_start:json_end]
                 result = json.loads(json_str)
 
+                extracted_info = result.get("extracted_info", {})
+                extracted_name = extracted_info.get("person_name", "") or extracted_info.get("name", "")
+
+                # Check name match if candidate name provided
+                name_match = True
+                if candidate_name and extracted_name:
+                    candidate_normalized = candidate_name.lower().replace(" ", "")
+                    extracted_normalized = extracted_name.lower().replace(" ", "")
+                    name_match = candidate_normalized in extracted_normalized or extracted_normalized in candidate_normalized
+
+                is_sample = result.get("is_sample", False)
+
                 return {
-                    "is_valid": result.get("is_valid", False),
+                    "is_valid": result.get("is_valid", False) and not is_sample,
                     "document_type": result.get("document_type", "Unknown"),
                     "confidence": result.get("confidence", 0.0),
-                    "extracted_info": result.get("extracted_info", {}),
+                    "extracted_info": extracted_info,
+                    "extracted_name": extracted_name,
+                    "name_match": name_match,
+                    "is_sample": is_sample,
                     "text_content": result.get("text_content", ""),
                     "raw_response": response
                 }
@@ -344,6 +374,7 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "raw_response": response
             }
 
@@ -354,13 +385,15 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "error": str(e)
             }
 
     async def _validate_with_ocr_fallback(
         self,
         image_path: str,
-        expected_type: Optional[str] = None
+        expected_type: Optional[str] = None,
+        candidate_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Validate using OCR text extraction + text LLM."""
         import json
@@ -374,6 +407,7 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "error": ocr_result.get("error", "OCR extraction failed")
             }
 
@@ -385,6 +419,7 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "error": "Insufficient text extracted"
             }
 
@@ -392,22 +427,31 @@ Return results as JSON."""
         system_prompt = """You are a document classification and validation assistant.
 Analyze the extracted text from a document and:
 1. Identify the document type (Aadhaar Card, PAN Card, Degree Certificate, Bank Passbook/Cancelled Cheque, Marksheet, Experience Certificate, Relieving Letter, Salary Slip, Form 16, etc.)
-2. Extract key information (name, dates, id numbers, etc.)
-3. Validate if the document appears authentic
+2. Extract key information - especially the person's NAME
+3. Validate if the document appears authentic (not a sample, placeholder, or dummy document)
+4. Check if the document is for a real person (not "Sample", "Test", "Demo", "Placeholder", etc.)
 
 Return a JSON response with:
-- "is_valid": boolean (true if document appears authentic)
+- "is_valid": boolean (true if document appears authentic AND not a sample)
 - "document_type": string (identified document type)
 - "confidence": float between 0 and 1
-- "extracted_info": object with key information"""
+- "extracted_info": object with key information including "person_name"
+- "name_match": boolean (true if extracted name matches expected candidate name)
+- "is_sample": boolean (true if document appears to be a sample/dummy document)"""
 
         prompt = f"""Analyze this document text and classify it:
 
 {extracted_text[:2000]}
 
 {f'Expected document type: {expected_type}' if expected_type else ''}
+{f'Expected candidate name: {candidate_name}' if candidate_name else ''}
 
-Identify the document type, extract key information, and validate.
+IMPORTANT:
+1. Identify the document type
+2. Extract the person's name from the document
+3. Check if this is a REAL document (not a sample/dummy/placeholder)
+4. If candidate_name is provided, check if the document name matches
+
 Return results as JSON."""
 
         try:
@@ -421,12 +465,29 @@ Return results as JSON."""
                 json_str = response[json_start:json_end]
                 result = json.loads(json_str)
 
+                extracted_info = result.get("extracted_info", {})
+                extracted_name = extracted_info.get("person_name", "") or extracted_info.get("name", "")
+
+                # Check name match if candidate name provided
+                name_match = True
+                if candidate_name and extracted_name:
+                    # Normalize names for comparison
+                    candidate_normalized = candidate_name.lower().replace(" ", "")
+                    extracted_normalized = extracted_name.lower().replace(" ", "")
+                    name_match = candidate_normalized in extracted_normalized or extracted_normalized in candidate_normalized
+
+                # Document is invalid if it's a sample
+                is_sample = result.get("is_sample", False)
+
                 return {
-                    "is_valid": result.get("is_valid", False),
+                    "is_valid": result.get("is_valid", False) and not is_sample,
                     "document_type": result.get("document_type", "Unknown"),
                     "confidence": result.get("confidence", 0.0),
-                    "extracted_info": result.get("extracted_info", {}),
+                    "extracted_info": extracted_info,
                     "text_content": extracted_text,
+                    "extracted_name": extracted_name,
+                    "name_match": name_match,
+                    "is_sample": is_sample,
                     "ocr_confidence": ocr_result.get("confidence", 0.5)
                 }
 
@@ -435,6 +496,7 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "text_content": extracted_text
             }
 
@@ -445,6 +507,7 @@ Return results as JSON."""
                 "confidence": 0.0,
                 "document_type": "Unknown",
                 "extracted_info": {},
+                "name_match": False,
                 "error": str(e)
             }
 

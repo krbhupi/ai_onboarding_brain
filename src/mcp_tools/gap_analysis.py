@@ -7,7 +7,7 @@ from sqlalchemy import select
 from config.logging import logger
 from src.models.database import (
     DocumentTracker, DocumentTypeMaster, StatusMaster,
-    CandidateInfo, JobTracker
+    CandidateInfo, JobTracker, JobTypeMaster
 )
 from src.constants.constants import StatusType, JobType
 from src.services.llm_service import LLMService
