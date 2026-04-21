@@ -1,8 +1,19 @@
 """Airflow DAG for HR Onboarding ETL pipeline."""
+import os
+import sys
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+
+# Dynamically resolve project root path
+# Get AIRFLOW_HOME or use this file's parent parent directory
+AIRFLOW_HOME = os.environ.get('AIRFLOW_HOME', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(AIRFLOW_HOME)
+
+# Add project root to Python path
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # Default arguments for the DAG
 default_args = {
@@ -18,13 +29,6 @@ default_args = {
 def run_etl_pipeline(**context):
     """Run the ETL pipeline to sync Excel data to database."""
     import asyncio
-    import sys
-    import os
-
-    # Add project path
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from src.services.etl_service import ETLService
     from src.core.database import get_db, init_db
@@ -42,13 +46,7 @@ def run_etl_pipeline(**context):
 def check_pending_jobs(**context):
     """Check for pending jobs that need processing."""
     import asyncio
-    import sys
-    import os
     from datetime import date
-
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from sqlalchemy import select
     from src.models.database import JobTracker, StatusMaster
@@ -73,12 +71,6 @@ def check_pending_jobs(**context):
 def process_job(**context):
     """Process a single job from the queue."""
     import asyncio
-    import sys
-    import os
-
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from src.mcp_tools.gap_analysis import GapAnalysisTool
     from src.mcp_tools.draft_prepare import DraftPrepareTool
@@ -132,12 +124,6 @@ def process_job(**context):
 def check_inbox(**context):
     """Check inbox for new candidate emails."""
     import asyncio
-    import sys
-    import os
-
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from src.services.email_service import EmailService
 
@@ -152,13 +138,7 @@ def check_inbox(**context):
 def create_daily_jobs(**context):
     """Create daily follow-up jobs for active candidates."""
     import asyncio
-    import sys
-    import os
     from datetime import date
-
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from sqlalchemy import select
     from src.models.database import CandidateInfo, JobTracker, JobTypeMaster
@@ -214,13 +194,7 @@ def create_daily_jobs(**context):
 def cleanup_old_jobs(**context):
     """Cleanup completed jobs older than 30 days."""
     import asyncio
-    import sys
-    import os
     from datetime import timedelta
-
-    project_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if project_path not in sys.path:
-        sys.path.insert(0, project_path)
 
     from sqlalchemy import delete
     from src.models.database import JobTracker
@@ -263,7 +237,8 @@ dag = DAG(
     5. Cleans up old completed jobs
 
     ### Configuration
-    - Excel file: data/input/offer_tracker.xlsx
+    - Uses dynamic paths from AIRFLOW_HOME environment variable
+    - Excel file: data/input/offer_tracker.xlsx (relative to project root)
     - Database: hr_onboarding.db (SQLite)
     - Email: Gmail SMTP/IMAP
     """
