@@ -1,13 +1,24 @@
-"""Airflow DAG for HR Onboarding ETL pipeline."""
+"""Airflow DAG for HR Onboarding ETL pipeline.
+
+This DAG implements the HR onboarding document collection workflow:
+1. Sync candidate data from Excel to database
+2. Create follow-up jobs for active candidates
+3. Check inbox for new emails and attachments
+4. Process pending jobs (validation, gap analysis)
+5. Cleanup old completed jobs
+
+Compatible with Apache Airflow >= 2.10.0
+Uses TaskFlow API for cleaner code.
+"""
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.decorators import task
 
 # Dynamically resolve project root path
-# Get AIRFLOW_HOME or use this file's parent parent directory
 AIRFLOW_HOME = os.environ.get('AIRFLOW_HOME', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PROJECT_ROOT = os.path.dirname(AIRFLOW_HOME)
 
@@ -26,8 +37,20 @@ default_args = {
 }
 
 
+# =============================================================================
+# Task Functions using TaskFlow API (Airflow 2.10+)
+# =============================================================================
+
+@task(task_id='run_etl_pipeline')
 def run_etl_pipeline(**context):
-    """Run the ETL pipeline to sync Excel data to database."""
+    """Run the ETL pipeline to sync Excel data to database.
+
+    Reads the offer tracker Excel file and syncs candidate data to SQLite database.
+    Creates new candidates and updates existing ones based on row hash comparison.
+
+    Returns:
+        dict: Summary of synced candidates (new, updated, total)
+    """
     import asyncio
 
     from src.services.etl_service import ETLService
@@ -40,16 +63,26 @@ def run_etl_pipeline(**context):
             result = await etl.sync_candidates()
             return result
 
-    return asyncio.run(_run())
+    result = asyncio.run(_run())
+    print(f"ETL Pipeline Result: {result}")
+    return result
 
 
+@task(task_id='check_pending_jobs')
 def check_pending_jobs(**context):
-    """Check for pending jobs that need processing."""
+    """Check for pending jobs that need processing.
+
+    Queries the job_tracker table for jobs with:
+    - status = PENDING
+    - action_date <= today
+
+    Returns:
+        list: List of job IDs that need processing
+    """
     import asyncio
-    from datetime import date
 
     from sqlalchemy import select
-    from src.models.database import JobTracker, StatusMaster
+    from src.models.database import JobTracker
     from src.core.database import get_db, init_db
     from src.constants.constants import StatusType
 
@@ -65,64 +98,115 @@ def check_pending_jobs(**context):
             jobs = result.scalars().all()
             return [job.job_id for job in jobs]
 
-    return asyncio.run(_check())
+    job_ids = asyncio.run(_check())
+    print(f"Found {len(job_ids)} pending jobs: {job_ids}")
+    return job_ids
 
 
-def process_job(**context):
-    """Process a single job from the queue."""
+@task(task_id='process_jobs')
+def process_jobs(pending_job_ids, **context):
+    """Process pending jobs from the queue.
+
+    Handles different job types:
+    - documents_required: Run gap analysis for candidate
+    - followup_mail: Generate and send follow-up email
+    - document_validation: Validate submitted documents
+
+    Args:
+        pending_job_ids: List of job IDs from check_pending_jobs task
+
+    Returns:
+        list: Processing results for each job
+    """
     import asyncio
 
     from src.mcp_tools.gap_analysis import GapAnalysisTool
     from src.mcp_tools.draft_prepare import DraftPrepareTool
+    from src.mcp_tools.document_validator import DocumentValidator
     from src.core.database import get_db, init_db
-    from src.models.database import JobTracker
+    from src.models.database import JobTracker, CandidateInfo
     from src.constants.constants import StatusType
     from sqlalchemy import select
-    from datetime import date
+    import os
 
-    job_ids = context['ti'].xcom_pull(task_ids='check_pending_jobs')
-
-    if not job_ids:
-        return "No jobs to process"
+    if not pending_job_ids:
+        print("No jobs to process")
+        return []
 
     async def _process():
         await init_db()
         async for session in get_db():
             processed = []
-            for job_id in job_ids[:5]:  # Process up to 5 jobs per run
+            for job_id in pending_job_ids[:5]:  # Process up to 5 jobs per run
                 try:
-                    # Get job
+                    # Get job details
                     result = await session.execute(
                         select(JobTracker).where(JobTracker.job_id == job_id)
                     )
                     job = result.scalar_one_or_none()
 
-                    if job:
-                        # Update status to in progress
-                        job.status_id = StatusType.IN_PROGRESS
-                        await session.commit()
+                    if not job:
+                        processed.append({'job_id': job_id, 'status': 'error', 'error': 'Job not found'})
+                        continue
 
-                        # Process based on job type
-                        if job.job_type_id == 1:  # documents_required
-                            # Run gap analysis
-                            gap_tool = GapAnalysisTool(session)
-                            await gap_tool.execute(candidate_id=job.candidate_id)
+                    # Get candidate info
+                    result = await session.execute(
+                        select(CandidateInfo).where(CandidateInfo.candidate_id == job.candidate_id)
+                    )
+                    candidate = result.scalar_one_or_none()
 
-                        # Mark complete
-                        job.status_id = StatusType.COMPLETE
-                        await session.commit()
-                        processed.append({'job_id': job_id, 'status': 'success'})
+                    # Update status to in progress
+                    job.status_id = StatusType.IN_PROGRESS
+                    await session.commit()
+
+                    # Process based on job type
+                    if job.job_type_id == 1:  # documents_required
+                        # Run gap analysis
+                        gap_tool = GapAnalysisTool(session)
+                        await gap_tool.execute(candidate_id=job.candidate_id)
+
+                    elif job.job_type_id == 2:  # document_validation
+                        # Validate documents with name check
+                        doc_folder = f"data/documents/{candidate.candidate_name}"
+                        if os.path.exists(doc_folder):
+                            validator = DocumentValidator(session)
+                            await validator.validate_all_documents(
+                                candidate_id=job.candidate_id,
+                                documents_folder=doc_folder,
+                                candidate_name=candidate.candidate_name
+                            )
+
+                    elif job.job_type_id == 3:  # followup_mail
+                        # Generate follow-up email draft
+                        draft_tool = DraftPrepareTool(session)
+                        await draft_tool.execute(candidate_id=job.candidate_id)
+
+                    # Mark complete
+                    job.status_id = StatusType.COMPLETE
+                    await session.commit()
+                    processed.append({'job_id': job_id, 'status': 'success'})
 
                 except Exception as e:
                     processed.append({'job_id': job_id, 'status': 'error', 'error': str(e)})
+                    print(f"Error processing job {job_id}: {e}")
 
             return processed
 
-    return asyncio.run(_process())
+    results = asyncio.run(_process())
+    print(f"Processed {len(results)} jobs: {results}")
+    return results
 
 
+@task(task_id='check_inbox')
 def check_inbox(**context):
-    """Check inbox for new candidate emails."""
+    """Check inbox for new candidate emails.
+
+    Reads unread emails from configured IMAP inbox,
+    processes attachments, and creates jobs for new candidates.
+
+    Returns:
+        str: Summary of processed emails
+    """
     import asyncio
 
     from src.services.email_service import EmailService
@@ -132,13 +216,24 @@ def check_inbox(**context):
         emails = await email_service.read_inbox(unread_only=True, limit=50)
         return f"Processed {len(emails)} new emails"
 
-    return asyncio.run(_check())
+    result = asyncio.run(_check())
+    print(result)
+    return result
 
 
+@task(task_id='create_daily_jobs')
 def create_daily_jobs(**context):
-    """Create daily follow-up jobs for active candidates."""
+    """Create daily follow-up jobs for active candidates.
+
+    Creates follow-up jobs for candidates with status:
+    - offer_accepted
+    - onboarding
+    - documents_pending
+
+    Returns:
+        str: Summary of jobs created
+    """
     import asyncio
-    from datetime import date
 
     from sqlalchemy import select
     from src.models.database import CandidateInfo, JobTracker, JobTypeMaster
@@ -161,6 +256,9 @@ def create_daily_jobs(**context):
                 select(JobTypeMaster).where(JobTypeMaster.job_type == "followup_mail")
             )
             followup_type = result.scalar_one_or_none()
+
+            if not followup_type:
+                return "Follow-up job type not found"
 
             jobs_created = 0
             for candidate in candidates:
@@ -186,15 +284,25 @@ def create_daily_jobs(**context):
                     jobs_created += 1
 
             await session.commit()
-            return f"Created {jobs_created} follow-up jobs"
+            return f"Created {jobs_created} follow-up jobs for {len(candidates)} active candidates"
 
-    return asyncio.run(_create())
+    result = asyncio.run(_create())
+    print(result)
+    return result
 
 
+@task(task_id='cleanup_old_jobs')
 def cleanup_old_jobs(**context):
-    """Cleanup completed jobs older than 30 days."""
+    """Cleanup completed jobs older than 30 days.
+
+    Removes job_tracker entries that are:
+    - status = COMPLETE
+    - updated_on > 30 days ago
+
+    Returns:
+        str: Summary of cleaned jobs
+    """
     import asyncio
-    from datetime import timedelta
 
     from sqlalchemy import delete
     from src.models.database import JobTracker
@@ -214,79 +322,74 @@ def cleanup_old_jobs(**context):
             await session.commit()
             return f"Cleaned up {result.rowcount} old jobs"
 
-    return asyncio.run(_cleanup())
+    result = asyncio.run(_cleanup())
+    print(result)
+    return result
 
 
-# Define the DAG
-dag = DAG(
+# =============================================================================
+# DAG Definition
+# =============================================================================
+
+with DAG(
     'hr_onboarding_etl',
     default_args=default_args,
     description='HR Onboarding ETL Pipeline - Daily sync and job processing',
     schedule_interval='0 22 * * *',  # Daily at 10 PM IST
     start_date=datetime(2024, 1, 1),
     catchup=False,
-    tags=['hr', 'onboarding', 'etl'],
+    tags=['hr', 'onboarding', 'etl', 'automation'],
     doc_md="""
     ## HR Onboarding ETL Pipeline
 
-    This DAG performs the following tasks daily:
-    1. Syncs candidate data from Excel to database
-    2. Creates follow-up jobs for active candidates
-    3. Checks inbox for new emails
-    4. Processes pending jobs
-    5. Cleans up old completed jobs
+    This DAG automates the HR onboarding document collection workflow.
+
+    ### Tasks
+    1. **run_etl_pipeline** - Sync candidate data from Excel to database
+    2. **create_daily_jobs** - Create follow-up jobs for active candidates
+    3. **check_pending_jobs** - Find jobs that need processing
+    4. **process_jobs** - Execute pending jobs (validation, gap analysis)
+    5. **check_inbox** - Monitor email for new documents
+    6. **cleanup_old_jobs** - Remove old completed jobs
 
     ### Configuration
-    - Uses dynamic paths from AIRFLOW_HOME environment variable
-    - Excel file: data/input/offer_tracker.xlsx (relative to project root)
-    - Database: hr_onboarding.db (SQLite)
-    - Email: Gmail SMTP/IMAP
-    """
-)
+    - Excel file: `data/input/offer_tracker.xlsx`
+    - Database: `hr_onboarding.db` (SQLite)
+    - Email: Gmail SMTP/IMAP (configured in .env)
+    - LLM: Ollama Cloud for document validation
 
-# Task definitions
-start_task = EmptyOperator(task_id='start', dag=dag)
+    ### Manual Trigger
+    ```bash
+    airflow dags trigger hr_onboarding_etl
+    ```
 
-etl_task = PythonOperator(
-    task_id='run_etl_pipeline',
-    python_callable=run_etl_pipeline,
-    dag=dag
-)
+    ### Requirements
+    - Apache Airflow >= 2.10.0
+    - Python >= 3.8
+    - All dependencies from requirements.txt
+    """,
+    render_doc_as_json=True,
+) as dag:
 
-create_jobs_task = PythonOperator(
-    task_id='create_daily_jobs',
-    python_callable=create_daily_jobs,
-    dag=dag
-)
+    # Task definitions
+    start_task = EmptyOperator(task_id='start')
 
-check_jobs_task = PythonOperator(
-    task_id='check_pending_jobs',
-    python_callable=check_pending_jobs,
-    dag=dag
-)
+    etl_task = run_etl_pipeline()
 
-process_jobs_task = PythonOperator(
-    task_id='process_jobs',
-    python_callable=process_job,
-    dag=dag
-)
+    create_jobs_task = create_daily_jobs()
 
-check_inbox_task = PythonOperator(
-    task_id='check_inbox',
-    python_callable=check_inbox,
-    dag=dag
-)
+    check_jobs_task = check_pending_jobs()
 
-cleanup_task = PythonOperator(
-    task_id='cleanup_old_jobs',
-    python_callable=cleanup_old_jobs,
-    dag=dag
-)
+    process_jobs_task = process_jobs(check_jobs_task)
 
-end_task = EmptyOperator(task_id='end', dag=dag)
+    inbox_task = check_inbox()
 
-# Define task dependencies
-# start >> etl >> create_jobs >> [check_jobs, check_inbox] >> process >> cleanup >> end
-start_task >> etl_task >> create_jobs_task >> [check_jobs_task, check_inbox_task]
-check_jobs_task >> process_jobs_task
-[process_jobs_task, check_inbox_task] >> cleanup_task >> end_task
+    cleanup_task = cleanup_old_jobs()
+
+    end_task = EmptyOperator(task_id='end')
+
+    # Define task dependencies
+    # Flow: start >> etl >> create_jobs >> [check_jobs, inbox] >> process >> cleanup >> end
+    start_task >> etl_task >> create_jobs_task >> [check_jobs_task, inbox_task]
+    check_jobs_task >> process_jobs_task
+    [process_jobs_task, inbox_task] >> cleanup_task >> end_task
