@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     TEMP_STORAGE_PATH: str = "/data/temp"
 
     # Excel Tracker
-    EXCEL_TRACKER_PATH: str = "/data/input/offer_tracker.xlsx"
+    EXCEL_TRACKER_PATH: str = "/media/bhupendra/Bhupendra/WorkSpace/Projects/HR_Automation/ai_onboarding_brain/data/input/offer_tracker.xlsx"
 
     # Airflow
     AIRFLOW_DAG_ID: str = "hr_onboarding_etl"

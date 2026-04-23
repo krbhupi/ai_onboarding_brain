@@ -14,8 +14,8 @@ import os
 import sys
 from datetime import datetime, timedelta, date
 from airflow import DAG
-from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
+from airflow.providers.standard.operators.python import PythonOperator
+from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.decorators import task
 
 # Dynamically resolve project root path
@@ -335,7 +335,7 @@ with DAG(
     'hr_onboarding_etl',
     default_args=default_args,
     description='HR Onboarding ETL Pipeline - Daily sync and job processing',
-    schedule_interval='0 22 * * *',  # Daily at 10 PM IST
+    schedule='0 22 * * *',  # Daily at 10 PM IST
     start_date=datetime(2024, 1, 1),
     catchup=False,
     tags=['hr', 'onboarding', 'etl', 'automation'],
@@ -368,8 +368,7 @@ with DAG(
     - Python >= 3.8
     - All dependencies from requirements.txt
     """,
-    render_doc_as_json=True,
-) as dag:
+    ) as dag:
 
     # Task definitions
     start_task = EmptyOperator(task_id='start')
