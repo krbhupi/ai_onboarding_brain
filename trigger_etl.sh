@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Trigger the HR onboarding ETL DAG
+# Trigger the HR onboarding ETL Pipeline (Python Implementation)
 
 # Determine project root relative to this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-export AIRFLOW_HOME="$PROJECT_ROOT/airflow"
+PROJECT_ROOT="$SCRIPT_DIR"
+SCRIPTS_DIR="$PROJECT_ROOT/scripts"
 
 # Activate virtual environment if present
 if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
   source "$PROJECT_ROOT/venv/bin/activate"
 fi
 
-# Trigger the DAG
-airflow dags trigger hr_onboarding_etl
+# Run the ETL pipeline script
+python "$SCRIPTS_DIR/run_etl_pipeline.py" --full

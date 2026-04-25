@@ -38,19 +38,17 @@ ai_onboarding_brain/
 ## Tech Stack
 
 - **Framework**: FastAPI
-- **Database**: PostgreSQL
+- **Database**: SQLite (via SQLAlchemy)
 - **Email**: IMAP/SMTP
 - **LLM**: Local Ollama (qwen2.5:7b)
-- **Orchestration**: Apache Airflow
+- **Orchestration**: Pure Python (schedule library)
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.10+
-- PostgreSQL 14+
 - Ollama (for local LLM)
-- Apache Airflow 2.7+
 
 ### Installation
 
@@ -68,15 +66,12 @@ cp .env.example .env
 # Edit .env with your settings
 ```
 
-3. Set up PostgreSQL:
-```sql
-CREATE DATABASE hr_onboarding;
-```
-
-4. Run database migrations:
+3. Run database migrations:
 ```bash
 alembic upgrade head
 ```
+
+4. The SQLite database will be created automatically on first run
 
 5. Start Ollama LLM:
 ```bash
@@ -84,16 +79,18 @@ ollama serve
 ollama pull qwen2.5:7b
 ```
 
-6. Start Airflow:
-```bash
-airflow db init
-airflow scheduler &
-airflow webserver &
-```
-
-7. Run the application:
+6. Run the application:
 ```bash
 uvicorn main:app --reload
+```
+
+7. Run ETL pipeline manually (optional):
+```bash
+# Run full ETL pipeline
+python scripts/run_etl_pipeline.py --full
+
+# Or run the scheduler for periodic execution
+python scripts/scheduler.py
 ```
 
 ## API Endpoints
@@ -155,7 +152,7 @@ Generates follow-up email drafts.
 
 ## Workflow
 
-1. **ETL Pipeline** (Daily at 10 PM)
+1. **ETL Pipeline** (Daily at 10 PM via scheduler.py)
    - Read `offer_tracker.xlsx`
    - Sync candidates to database
    - Create initial jobs
@@ -180,6 +177,15 @@ Generates follow-up email drafts.
 ```bash
 pytest tests/ -v
 ```
+
+## Production Deployment
+
+For production deployment:
+
+1. **Database**: Configure Oracle DB connection in `.env`
+2. **LLM Models**: Use hosted LLM and VLM models by updating API endpoints
+3. **Scheduling**: Use system-level cron jobs instead of the Python scheduler for better reliability
+4. **Monitoring**: Implement proper logging and monitoring for production use
 
 ## License
 

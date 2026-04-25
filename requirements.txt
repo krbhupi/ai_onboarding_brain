@@ -25,9 +25,12 @@ httpx>=0.24
 # Task scheduling
 apscheduler>=3.10
 
-# Apache Airflow (latest)
-apache-airflow>=2.10.0
-apache-airflow-providers-sqlite>=3.0.0
+# Apache Airflow (removed - replaced with pure Python implementation)
+# apache-airflow>=2.10.0
+# apache-airflow-providers-sqlite>=3.0.0
+
+# Task scheduling (new)
+schedule>=1.2.0
 
 # Environment management
 python-dotenv>=1.0
