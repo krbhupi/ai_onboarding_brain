@@ -16,6 +16,7 @@ class CandidateInfo(Base):
     candidate_id = Column(Integer, primary_key=True, autoincrement=True)
     cin = Column(String(50), unique=True, nullable=False, index=True)
     recruiter_name = Column(String(100))
+    recruiter_email = Column(String(100))
     cv_sourced_date = Column(Date)
     jd_published_date = Column(Date)
     prefix = Column(String(20))

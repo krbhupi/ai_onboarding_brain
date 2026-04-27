@@ -7,6 +7,7 @@ from pathlib import Path
 
 from config.settings import get_settings
 from config.logging import logger
+from src.services.new_llm_provider import NewLLMProvider
 
 settings = get_settings()
 
@@ -19,6 +20,14 @@ class LLMService:
         self.model = settings.LLM_MODEL
         self.timeout = settings.LLM_TIMEOUT
         self.api_key = settings.OLLAMA_API_KEY or os.getenv("OLLAMA_API_KEY")
+
+        # New LLM provider
+        self.new_llm_enabled = settings.NEW_LLM_ENABLED
+        if self.new_llm_enabled:
+            self.new_llm_provider = NewLLMProvider(
+                model=settings.NEW_LLM_MODEL,
+                url=settings.NEW_LLM_URL
+            )
 
         # Vision configuration
         self.vision_backend = os.getenv("VISION_BACKEND", "ocr_fallback")
@@ -36,6 +45,22 @@ class LLMService:
         system_prompt: Optional[str] = None
     ) -> str:
         """Make a call to the LLM API."""
+        # Use new LLM provider if enabled
+        if self.new_llm_enabled:
+            try:
+                # Format messages for chat-based API
+                messages = []
+                if system_prompt:
+                    messages.append({"role": "system", "content": system_prompt})
+                messages.append({"role": "user", "content": prompt})
+
+                return await self.new_llm_provider.invoke(messages)
+            except Exception as e:
+                logger.error(f"New LLM provider failed: {e}")
+                # Fall back to Ollama if new provider fails
+                pass
+
+        # Default to Ollama
         url = f"{self.base_url}/api/generate"
 
         headers = {"Content-Type": "application/json"}

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from config.settings import get_settings
 from config.logging import logger
+from src.services.exchange_email_service import ExchangeEmailService
 
 settings = get_settings()
 
@@ -32,6 +33,11 @@ class EmailService:
         self.smtp_username = settings.SMTP_USERNAME
         self.smtp_password = settings.SMTP_PASSWORD
         self.smtp_from = settings.SMTP_FROM_EMAIL
+
+        # Exchange email service
+        self.use_exchange = getattr(settings, 'USE_EXCHANGE', False)
+        if self.use_exchange:
+            self.exchange_service = ExchangeEmailService()
 
         self._executor = ThreadPoolExecutor(max_workers=4)
 
@@ -56,6 +62,11 @@ class EmailService:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Read emails from inbox asynchronously."""
+        # Use Exchange if enabled
+        if self.use_exchange:
+            return await self.exchange_service.read_inbox(folder, unread_only, limit)
+
+        # Default to IMAP/SMTP
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             self._executor,
@@ -175,6 +186,11 @@ class EmailService:
         save_path: Path
     ) -> Path:
         """Save email attachment to disk."""
+        # Use Exchange if enabled
+        if self.use_exchange:
+            return await self.exchange_service.save_attachment(attachment, save_path)
+
+        # Default to IMAP/SMTP
         loop = asyncio.get_event_loop()
 
         def _save():
@@ -195,6 +211,11 @@ class EmailService:
         attachments: Optional[List[Path]] = None
     ) -> bool:
         """Send email via SMTP."""
+        # Use Exchange if enabled
+        if self.use_exchange:
+            return await self.exchange_service.send_email(to_address, subject, body, html_body, attachments)
+
+        # Default to IMAP/SMTP
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             self._executor,
@@ -263,6 +284,13 @@ class EmailService:
         folder: str = "INBOX"
     ) -> bool:
         """Mark email as read."""
+        # Use Exchange if enabled
+        if self.use_exchange:
+            # For Exchange, we need the email item, not just the message_id
+            # This is a limitation of the current interface
+            return False
+
+        # Default to IMAP/SMTP
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
             self._executor,
@@ -270,6 +298,15 @@ class EmailService:
             message_id,
             folder
         )
+
+    async def mark_exchange_email_as_read(
+        self,
+        email_item: Any
+    ) -> bool:
+        """Mark Exchange email as read using the email item."""
+        if self.use_exchange:
+            return await self.exchange_service.mark_as_read(email_item)
+        return False
 
     def _mark_as_read_sync(self, message_id: str, folder: str) -> bool:
         """Synchronous mark as read."""

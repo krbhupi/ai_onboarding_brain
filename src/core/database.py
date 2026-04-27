@@ -14,6 +14,17 @@ if not settings.DATABASE_URL.startswith("sqlite"):
     engine_kwargs["pool_size"] = settings.DATABASE_POOL_SIZE
     engine_kwargs["max_overflow"] = settings.DATABASE_MAX_OVERFLOW
 
+# Oracle-specific configurations
+if settings.DATABASE_URL.startswith("oracle"):
+    # Oracle may need different connection parameters
+    engine_kwargs["connect_args"] = {
+        "events": True,
+        # Add other Oracle-specific parameters as needed
+    }
+    # For Oracle, we might need to adjust pool settings
+    engine_kwargs.pop("pool_size", None)
+    engine_kwargs.pop("max_overflow", None)
+
 engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs)
 
 # Create async session factory

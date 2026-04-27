@@ -169,11 +169,17 @@ class DraftPrepareTool:
         days_since_last_contact: int,
         template: Optional[MailTypeMaster]
     ) -> Dict[str, str]:
-        """Generate email draft using LLM."""
+        """Generate email draft using LLM or database templates."""
         candidate_name = candidate.candidate_name or "Candidate"
         candidate_email = candidate.personal_email_id or ""
 
-        # Use LLM to generate draft
+        # If we have a database template, use it
+        if template and template.mail_template:
+            return await self._generate_from_template(
+                template, candidate, missing_docs, days_since_last_contact
+            )
+
+        # Otherwise, use LLM to generate draft
         llm_draft = await self.llm_service.generate_followup_email(
             candidate_name=candidate_name,
             missing_documents=missing_docs,
@@ -184,6 +190,38 @@ class DraftPrepareTool:
         # Structure the draft
         subject = self._generate_subject(mail_type="followup", missing_docs=missing_docs)
         body = self._format_body(llm_draft, candidate_name)
+
+        return {
+            "subject": subject,
+            "body": body
+        }
+
+    async def _generate_from_template(
+        self,
+        template: MailTypeMaster,
+        candidate: CandidateInfo,
+        missing_docs: List[str],
+        days_since_last_contact: int
+    ) -> Dict[str, str]:
+        """Generate email from database template."""
+        candidate_name = candidate.candidate_name or "Candidate"
+        candidate_email = candidate.personal_email_id or ""
+
+        # Format the document list
+        document_list = self._format_document_list(missing_docs)
+
+        # Replace placeholders in template
+        body_template = template.mail_template or ""
+        body = body_template.format(
+            candidate_name=candidate_name,
+            candidate_email=candidate_email,
+            document_list=document_list,
+            missing_documents=document_list,
+            days_since_last_contact=days_since_last_contact
+        )
+
+        # Generate subject based on template type
+        subject = self._generate_subject(template.mail_type, missing_docs)
 
         return {
             "subject": subject,
@@ -241,6 +279,27 @@ HR Team
         """Generate initial document request email."""
         candidate_name = candidate.candidate_name or "Candidate"
 
+        # Try to get template from database
+        template = await self._get_mail_template("initial_request")
+
+        if template and template.mail_template:
+            # Format the document list
+            document_list = self._format_document_list(required_docs)
+
+            # Replace placeholders in template
+            body = template.mail_template.format(
+                candidate_name=candidate_name,
+                document_list=document_list,
+                missing_documents=document_list
+            )
+
+            subject = "Document Submission Required - HR Onboarding"
+            return {
+                "subject": subject,
+                "body": body
+            }
+
+        # Fallback to hardcoded template
         body = f"""Dear {candidate_name},
 
 Welcome to [Company Name]! We're excited to have you join our team.

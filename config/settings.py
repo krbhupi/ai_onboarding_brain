@@ -16,9 +16,15 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/hr_onboarding"
+    DATABASE_URL: str = "sqlite+aiosqlite:///./hr_onboarding.db"
     DATABASE_POOL_SIZE: int = 5
     DATABASE_MAX_OVERFLOW: int = 10
+
+    # Oracle Database Configuration
+    ORACLE_USER: Optional[str] = None
+    ORACLE_PASSWORD: Optional[str] = None
+    ORACLE_DSN: Optional[str] = None
+    ORACLE_SCHEMA: Optional[str] = None
 
     # Email - IMAP
     IMAP_HOST: str = "outlook.office365.com"
@@ -40,11 +46,24 @@ class Settings(BaseSettings):
     OUTLOOK_CLIENT_ID: Optional[str] = None
     OUTLOOK_CLIENT_SECRET: Optional[str] = None
 
+    # Exchange Email Configuration
+    EXCHANGE_USERNAME: Optional[str] = None
+    EXCHANGE_PASSWORD: Optional[str] = None
+    EXCHANGE_SERVER: Optional[str] = None
+    EXCHANGE_PRIMARY_SMTP: Optional[str] = None
+    EXCHANGE_DISABLE_SSL_VERIFY: bool = False
+
     # LLM Configuration (Ollama)
     LLM_BASE_URL: str = "https://ollama.com"
     LLM_MODEL: str = "gpt-oss:120b"
     LLM_TIMEOUT: int = 120
     OLLAMA_API_KEY: Optional[str] = None
+
+    # New LLM Configuration
+    NEW_LLM_ENABLED: bool = False
+    NEW_LLM_MODEL: str = "gpt-oss-20b"
+    NEW_LLM_URL: str = "http://172.17.58.114:8002/v1/chat/completions"
+    NEW_LLM_TIMEOUT: int = 120
 
     # Vision LLM Configuration
     VISION_BACKEND: str = "ocr_fallback"  # Options: local_ollama, ollama_cloud, openai, ocr_fallback

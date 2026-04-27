@@ -1,60 +1,32 @@
-# FastAPI and ASGI server
-fastapi>=0.100.0
-uvicorn[standard]>=0.23.0
+# Core dependencies
+fastapi>=0.68.0
+uvicorn>=0.15.0
+sqlalchemy>=2.0.0
+aiosqlite>=0.17.0
+asyncpg>=0.25.0
 
 # Database
-sqlalchemy>=2.0
-aiosqlite>=0.19
-asyncpg>=0.28
-alembic>=1.12
+oracledb>=3.4.0
+cx_Oracle>=8.3.0
 
-# Data validation
-pydantic>=2.0
-pydantic-settings>=2.0
-python-multipart>=0.0.6
+# Email
+exchangelib>=5.6.0
 
-# Excel processing
-openpyxl>=3.1
+# LLM and AI
+httpx>=0.23.0
+pydantic-settings>=2.0.0
 
-# Email handling
-imapclient>=2.3
+# OCR and Image Processing
+pdf2image>=1.16.0
+Pillow>=9.0.0
+pytesseract>=0.3.10
+easyocr>=1.7.0
+paddleocr>=2.7.0
+paddlepaddle>=2.6.0
+pdfplumber>=0.10.0
 
-# HTTP client for LLM calls
-httpx>=0.24
-
-# Task scheduling
-apscheduler>=3.10
-
-# Apache Airflow (removed - replaced with pure Python implementation)
-# apache-airflow>=2.10.0
-# apache-airflow-providers-sqlite>=3.0.0
-
-# Task scheduling (new)
-schedule>=1.2.0
-
-# Environment management
-python-dotenv>=1.0
-
-# Testing
-pytest>=7.0
-pytest-asyncio>=0.21
-pytest-cov>=4.0
-
-# Logging
-structlog>=23.0
-
-# File handling
-aiofiles>=23.0
-python-magic>=0.4
-Pillow>=10.0
-
-# PDF processing
-PyPDF2>=3.0
-pdfplumber>=0.11
-pdf2image>=1.17
-
-# OCR processing
-pytesseract>=0.3
-
-# SQLite async support
-aiosqlite>=0.19
+# Utilities
+python-multipart>=0.0.5
+passlib>=1.7.4
+python-jose>=3.3.0
+python-dotenv>=0.19.0
