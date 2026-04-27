@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     NEW_LLM_URL: str = "http://172.17.58.114:8002/v1/chat/completions"
     NEW_LLM_TIMEOUT: int = 120
 
+    # OCR VLM Configuration
+    OCR_VLM_ENABLED: bool = False
+    OCR_VLM_MODEL: str = "/local-models/numind/NuMarkdown-BB-Thinking"
+    OCR_VLM_URL: str = "http://172.17.58.109:8001/v1/chat/completions"
+
     # Vision LLM Configuration
     VISION_BACKEND: str = "ocr_fallback"  # Options: local_ollama, ollama_cloud, openai, ocr_fallback
     VISION_MODEL: str = "llava:13b"

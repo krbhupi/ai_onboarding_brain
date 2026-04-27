@@ -71,6 +71,13 @@ Integration Tests Summary: 4/4 tests passed
 - **Configuration**: Oracle credentials in .env file
 - **Flexibility**: Toggle between SQLite (dev) and Oracle (prod)
 
+### 4. Specialized OCR Vision LLM (Optional)
+- **Model**: /local-models/numind/NuMarkdown-BB-Thinking
+- **Endpoint**: http://172.17.58.109:8001/v1/chat/completions
+- **Purpose**: Extracts header-level identifiers from onboarding documents
+- **Activation**: Set `OCR_VLM_ENABLED=true` in .env
+- **Features**: Document type classification, issuing authority identification
+
 ## Configuration Instructions
 
 ### Enable New LLM Service

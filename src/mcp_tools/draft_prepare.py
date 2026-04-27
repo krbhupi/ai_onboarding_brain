@@ -238,7 +238,9 @@ class DraftPrepareTool:
             return "Document Submission Required - HR Onboarding"
 
         elif mail_type == "followup_reminder":
-            if len(missing_docs) == 1:
+            if len(missing_docs) == 0:
+                return "Follow-up: Onboarding Process Update"
+            elif len(missing_docs) == 1:
                 return f"Reminder: {missing_docs[0]} Submission Required"
             else:
                 return f"Reminder: {len(missing_docs)} Documents Pending Submission"

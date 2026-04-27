@@ -56,6 +56,20 @@
 - `requirements.txt` - Updated with all new dependencies
 - `test_oracle_connection.py` - Test script for Oracle database connection
 
+## 5. Specialized OCR Vision LLM Integration
+
+### Files Created:
+- `src/services/ocr_vlm_provider.py` - Specialized VLM provider for document header identification
+
+### Configuration Updates:
+- Added OCR VLM configuration options in `config/settings.py`:
+  - `OCR_VLM_ENABLED`: bool = False
+  - `OCR_VLM_MODEL`: str = "/local-models/numind/NuMarkdown-BB-Thinking"
+  - `OCR_VLM_URL`: str = "http://172.17.58.109:8001/v1/chat/completions"
+
+### Service Integration:
+- Updated `src/services/llm_service.py` to support the OCR VLM provider as an optional feature
+
 ## Usage Instructions
 
 ### Enabling New LLM Provider:

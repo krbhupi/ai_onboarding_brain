@@ -8,6 +8,7 @@ from pathlib import Path
 from config.settings import get_settings
 from config.logging import logger
 from src.services.new_llm_provider import NewLLMProvider
+from src.services.ocr_vlm_provider import OCRVLMProvider
 
 settings = get_settings()
 
@@ -27,6 +28,14 @@ class LLMService:
             self.new_llm_provider = NewLLMProvider(
                 model=settings.NEW_LLM_MODEL,
                 url=settings.NEW_LLM_URL
+            )
+
+        # OCR VLM provider for specialized document header analysis
+        self.ocr_vlm_enabled = getattr(settings, 'OCR_VLM_ENABLED', False)
+        if self.ocr_vlm_enabled:
+            self.ocr_vlm_provider = OCRVLMProvider(
+                model=getattr(settings, 'OCR_VLM_MODEL', '/local-models/numind/NuMarkdown-BB-Thinking'),
+                url=getattr(settings, 'OCR_VLM_URL', 'http://172.17.58.109:8001/v1/chat/completions')
             )
 
         # Vision configuration
@@ -191,10 +200,21 @@ Classify this email reply from a candidate regarding document submission."""
         """Generate a follow-up email draft using LLM."""
         system_prompt = """You are an HR communication assistant.
 Generate professional, polite follow-up emails for document collection.
-Keep the tone friendly but professional. Include specific document names.
+Keep the tone friendly but professional. Include specific document names when applicable.
 Do not include placeholders - use actual information provided."""
 
-        prompt = f"""Generate a follow-up email for:
+        # Handle case when there are no missing documents
+        if len(missing_documents) == 0:
+            prompt = f"""Generate a follow-up email for:
+
+Candidate name: {candidate_name}
+Status: All required documents have been received
+Days since last contact: {days_since_last_contact}
+Previous context: {previous_communications or 'First follow-up'}
+
+Write a professional email confirming that all documents have been received and thanking the candidate."""
+        else:
+            prompt = f"""Generate a follow-up email for:
 
 Candidate name: {candidate_name}
 Missing documents: {', '.join(missing_documents)}
